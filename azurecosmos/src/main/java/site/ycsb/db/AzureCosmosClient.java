@@ -27,11 +27,11 @@ import java.util.Set;
 import java.util.Vector;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.microsoft.azure.documentdb.*;
+import com.azure.cosmos.*;
+import com.azure.cosmos.implementation.ConnectionPolicy;
 
 import site.ycsb.ByteIterator;
 import site.ycsb.DB;
@@ -65,7 +65,7 @@ public class AzureCosmosClient extends DB {
    */
   private static final AtomicInteger INIT_COUNT = new AtomicInteger(0);
 
-  private static DocumentClient client;
+  private static CosmosClient client;
   private String databaseName;
   private boolean useUpsert;
   private int maxDegreeOfParallelismForQuery;
@@ -84,12 +84,12 @@ public class AzureCosmosClient extends DB {
   private void initAzureCosmosClient() throws DBException {
     // Connection properties
     String primaryKey = this.getStringProperty("azurecosmos.primaryKey", null);
-    if (StringUtils.isEmpty(primaryKey)) {
+    if (primaryKey == null || primaryKey.isEmpty()) {
       throw new DBException("Missing primary key required to connect to the database.");
     }
 
     String uri = getProperties().getProperty("azurecosmos.uri", null);
-    if (StringUtils.isEmpty(uri)) {
+    if (primaryKey == null || primaryKey.isEmpty()) {
       throw new DBException("Missing uri required to connect to the database.");
     }
 
