@@ -105,8 +105,8 @@ public class AzureCosmosClient extends DB {
     if (client != null) {
       return;
     }
-    org.apache.log4j.Logger.getLogger("io.netty")
-        .setLevel(org.apache.log4j.Level.OFF);
+    //org.apache.log4j.Logger.getLogger("io.netty")
+    //    .setLevel(org.apache.log4j.Level.OFF);
     initAzureCosmosClient();
   }
 
@@ -182,29 +182,38 @@ public class AzureCosmosClient extends DB {
           this.maxDegreeOfParallelism, this.maxBufferedItemCount);
 
       CosmosClientBuilder builder = new CosmosClientBuilder().endpoint(uri)
-          .key(primaryKey).throttlingRetryOptions(retryOptions)
-          .endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel);
+          .key(primaryKey).consistencyLevel(consistencyLevel);
+      // .throttlingRetryOptions(retryOptions)
+      // .endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel);
 
-      if (useGateway) {
-        builder = builder.gatewayMode(gatewayConnectionConfig);
+      /*if (useGateway) {
+        // builder = builder.gatewayMode(gatewayConnectionConfig);
       } else {
-        builder = builder.directMode(directConnectionConfig,
-            gatewayConnectionConfig);
-      }
+        // builder = builder.directMode(directConnectionConfig,
+        // gatewayConnectionConfig);
+      } */
       AzureCosmosClient.client = builder.buildClient();
       LOGGER.info("Azure Cosmos DB connection created to {}", uri);
     } catch (IllegalArgumentException e) {
+      if (!this.includeExceptionStackInLog) {
+        e = null;
+      }
       throw new DBException(
           "Illegal argument passed in. Check the format of your parameters.",
           e);
     }
 
     // Verify the database exists
-    AzureCosmosClient.database = AzureCosmosClient.client
-        .getDatabase(databaseName);
-    if (AzureCosmosClient.database == null) {
+    try {
+      AzureCosmosClient.database = AzureCosmosClient.client
+          .getDatabase(databaseName);
+      AzureCosmosClient.database.read();
+    } catch (CosmosException e) {
+      if (!this.includeExceptionStackInLog) {
+        e = null;
+      }
       throw new DBException("Invalid database name (" + this.databaseName
-          + ") or failed to read database.");
+          + ") or failed to read database.", e);
     }
   }
 
@@ -273,6 +282,7 @@ public class AzureCosmosClient extends DB {
       // Test if this needs a null check
       CosmosItemResponse<ObjectNode> response = container.readItem(key,
           new PartitionKey(key), ObjectNode.class);
+      LOGGER.info(""+response.getDuration().toMillis());
       ObjectNode node = response.getItem();
       Map<String, String> stringResults = new HashMap<>();
       if (fields == null) {
@@ -395,21 +405,20 @@ public class AzureCosmosClient extends DB {
       Map<String, ByteIterator> values) {
 
     try {
- 
+
       // read first
-      
+
       CosmosContainer container = database.getContainer(table);
 
       // Test if this needs a null check
       CosmosItemResponse<ObjectNode> response = container.readItem(key,
           new PartitionKey(key), ObjectNode.class);
       ObjectNode node = response.getItem();
-      
+
       for (Entry<String, ByteIterator> pair : values.entrySet()) {
         node.put(pair.getKey(), pair.getValue().toString());
       }
-      
-      
+
       // refactor this
       PartitionKey pk = new PartitionKey(key);
       container.replaceItem(node, key, pk, new CosmosItemRequestOptions());
@@ -421,7 +430,6 @@ public class AzureCosmosClient extends DB {
       }
       LOGGER.error("Failed to update key {} to collection {} in database {}",
           key, table, this.databaseName, e);
-
 
       // Azure Cosmos does not have patch support. Until then we need to read
       // the document, update in place, and then write back.
