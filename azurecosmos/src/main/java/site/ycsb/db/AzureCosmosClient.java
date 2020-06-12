@@ -143,7 +143,7 @@ public class AzureCosmosClient extends DB {
 
     ConsistencyLevel consistencyLevel = ConsistencyLevel
         .valueOf(this.getStringProperty("azurecosmos.consistencyLevel",
-            DEFAULT_CONSISTENCY_LEVEL.toString()));
+            DEFAULT_CONSISTENCY_LEVEL.toString().toUpperCase()));
     boolean useGateway = this.getBooleanProperty("azurecosmos.useGateway",
         DEFAULT_USE_GATEWAY);
 
@@ -380,45 +380,86 @@ public class AzureCosmosClient extends DB {
     return Status.OK;
   }
 
+  /**
+   * Update a record in the database. Any field/value pairs in the specified
+   * values HashMap will be written into the record with the specified record
+   * key, overwriting any existing values with the same field name.
+   *
+   * @param table The name of the table
+   * @param key The record key of the record to write.
+   * @param values A HashMap of field/value pairs to update in the record
+   * @return Zero on success, a non-zero error code on error
+   */
   @Override
   public Status update(String table, String key,
       Map<String, ByteIterator> values) {
-    // Azure Cosmos does not have patch support. Until then we need to read
-    // the document, update in place, and then write back.
-    // This could actually be made more efficient by using a stored procedure
-    // and doing the read/modify write on the server side. Perhaps
-    // that will be a future improvement.
 
-    /*
-     * String documentLink = getDocumentLink(this.databaseName, table, key);
-     * ResourceResponse<Document> updatedResource = null;
-     * ResourceResponse<Document> readResouce = null; RequestOptions reqOptions
-     * = null; Document document = null;
-     * 
-     * try { reqOptions = getRequestOptions(key); readResouce =
-     * AzureCosmosClient.client.readDocument(documentLink, reqOptions); document
-     * = readResouce.getResource(); } catch (DocumentClientException e) { if
-     * (!this.includeExceptionStackInLog) { e = null; } LOGGER.error(
-     * "Failed to read key {} in collection {} in database {} during update operation"
-     * , key, table, this.databaseName, e); return Status.ERROR; }
-     * 
-     * // Update values for (Entry<String, ByteIterator> entry :
-     * values.entrySet()) { document.set(entry.getKey(),
-     * entry.getValue().toString()); }
-     * 
-     * AccessCondition accessCondition = new AccessCondition();
-     * accessCondition.setCondition(document.getETag());
-     * accessCondition.setType(AccessConditionType.IfMatch);
-     * reqOptions.setAccessCondition(accessCondition);
-     * 
-     * try { updatedResource =
-     * AzureCosmosClient.client.replaceDocument(documentLink, document,
-     * reqOptions); } catch (DocumentClientException e) { if
-     * (!this.includeExceptionStackInLog) { e = null; }
-     * LOGGER.error("Failed to update key {}", key, e); return Status.ERROR; }
-     */
+    try {
+ 
+      // read first
+      
+      CosmosContainer container = database.getContainer(table);
 
-    return Status.OK;
+      // Test if this needs a null check
+      CosmosItemResponse<ObjectNode> response = container.readItem(key,
+          new PartitionKey(key), ObjectNode.class);
+      ObjectNode node = response.getItem();
+      
+      for (Entry<String, ByteIterator> pair : values.entrySet()) {
+        node.put(pair.getKey(), pair.getValue().toString());
+      }
+      
+      
+      // refactor this
+      PartitionKey pk = new PartitionKey(key);
+      container.replaceItem(node, key, pk, new CosmosItemRequestOptions());
+
+      return Status.OK;
+    } catch (CosmosException e) {
+      if (!this.includeExceptionStackInLog) {
+        e = null;
+      }
+      LOGGER.error("Failed to update key {} to collection {} in database {}",
+          key, table, this.databaseName, e);
+
+
+      // Azure Cosmos does not have patch support. Until then we need to read
+      // the document, update in place, and then write back.
+      // This could actually be made more efficient by using a stored procedure
+      // and doing the read/modify write on the server side. Perhaps
+      // that will be a future improvement.
+
+      /*
+       * String documentLink = getDocumentLink(this.databaseName, table, key);
+       * ResourceResponse<Document> updatedResource = null;
+       * ResourceResponse<Document> readResouce = null; RequestOptions
+       * reqOptions = null; Document document = null;
+       * 
+       * try { reqOptions = getRequestOptions(key); readResouce =
+       * AzureCosmosClient.client.readDocument(documentLink, reqOptions);
+       * document = readResouce.getResource(); } catch (DocumentClientException
+       * e) { if (!this.includeExceptionStackInLog) { e = null; } LOGGER.error(
+       * "Failed to read key {} in collection {} in database {} during update operation"
+       * , key, table, this.databaseName, e); return Status.ERROR; }
+       * 
+       * // Update values for (Entry<String, ByteIterator> entry :
+       * values.entrySet()) { document.set(entry.getKey(),
+       * entry.getValue().toString()); }
+       * 
+       * AccessCondition accessCondition = new AccessCondition();
+       * accessCondition.setCondition(document.getETag());
+       * accessCondition.setType(AccessConditionType.IfMatch);
+       * reqOptions.setAccessCondition(accessCondition);
+       * 
+       * try { updatedResource =
+       * AzureCosmosClient.client.replaceDocument(documentLink, document,
+       * reqOptions); } catch (DocumentClientException e) { if
+       * (!this.includeExceptionStackInLog) { e = null; }
+       * LOGGER.error("Failed to update key {}", key, e); return Status.ERROR; }
+       */
+
+    }
+    return Status.ERROR;
   }
 
   /**
