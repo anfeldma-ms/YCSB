@@ -19,31 +19,50 @@
 package site.ycsb.db;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
 // import java.util.Iterator;
 // import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 // import java.util.Map.Entry;
 import java.util.Set;
 import java.util.Vector;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.azure.cosmos.ConsistencyLevel;
+import com.azure.cosmos.CosmosClient;
+import com.azure.cosmos.CosmosClientBuilder;
+import com.azure.cosmos.CosmosContainer;
+import com.azure.cosmos.CosmosDatabase;
+import com.azure.cosmos.CosmosException;
+import com.azure.cosmos.DirectConnectionConfig;
+import com.azure.cosmos.GatewayConnectionConfig;
+import com.azure.cosmos.ThrottlingRetryOptions;
+// import com.azure.cosmos.implementation.ConnectionPolicy;
+import com.azure.cosmos.models.CosmosItemRequestOptions;
+import com.azure.cosmos.models.CosmosItemResponse;
+import com.azure.cosmos.models.CosmosQueryRequestOptions;
+import com.azure.cosmos.models.PartitionKey;
+import com.azure.cosmos.models.SqlParameter;
+import com.azure.cosmos.models.SqlQuerySpec;
+import com.azure.cosmos.util.CosmosPagedIterable;
+import com.fasterxml.jackson.databind.JsonNode;
 // import com.fasterxml.jackson.core.JsonProcessingException;
 // import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.azure.cosmos.*;
-// import com.azure.cosmos.implementation.ConnectionPolicy;
-import com.azure.cosmos.models.CosmosItemRequestOptions;
-import com.azure.cosmos.models.PartitionKey;
-
 import site.ycsb.ByteIterator;
 import site.ycsb.DB;
 import site.ycsb.DBException;
 import site.ycsb.Status;
+import site.ycsb.StringByteIterator;
 // import site.ycsb.StringByteIterator;
 
 /**
@@ -54,19 +73,13 @@ public class AzureCosmosClient extends DB {
 
   protected static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-  // Document uri naming
-  // private static final String DATABASES_PATH_SEGMENT = "dbs";
-  // private static final String COLLECTIONS_PATH_SEGMENT = "colls";
-  // private static final String DOCUMENTS_PATH_SEGMENT = "docs";
-
   // Default configuration values
   private static final ConsistencyLevel DEFAULT_CONSISTENCY_LEVEL = ConsistencyLevel.SESSION;
-  // private static final ConnectionMode DEFAULT_CONNECTION_MODE =
-  // ConnectionMode.DIRECT;
   private static final String DEFAULT_DATABASE_NAME = "ycsb";
   private static final boolean DEFAULT_USE_GATEWAY = false;
   private static final boolean DEFAULT_USE_UPSERT = false;
-  private static final int DEFAULT_MAX_DEGREE_OF_PARALLELISM_FOR_QUERY = 0;
+  private static final int DEFAULT_MAX_DEGREE_OF_PARALLELISM = 0;
+  private static final int DEFAULT_MAX_BUFFERED_ITEM_COUNT = 0;
   private static final boolean DEFAULT_INCLUDE_EXCEPTION_STACK_IN_LOG = false;
 
   private static final Logger LOGGER = LoggerFactory
@@ -82,7 +95,8 @@ public class AzureCosmosClient extends DB {
   private static CosmosDatabase database;
   private String databaseName;
   private boolean useUpsert;
-  private int maxDegreeOfParallelismForQuery;
+  private int maxDegreeOfParallelism;
+  private int maxBufferedItemCount;
   private boolean includeExceptionStackInLog;
 
   @Override
@@ -91,13 +105,13 @@ public class AzureCosmosClient extends DB {
     if (client != null) {
       return;
     }
-
+    org.apache.log4j.Logger.getLogger("io.netty")
+        .setLevel(org.apache.log4j.Level.OFF);
     initAzureCosmosClient();
   }
 
   private void initAzureCosmosClient() throws DBException {
 
-    LOGGER.error("INIT TIME");
     // Connection properties
     String primaryKey = this.getStringProperty("azurecosmos.primaryKey", null);
     if (primaryKey == null || primaryKey.isEmpty()) {
@@ -116,9 +130,12 @@ public class AzureCosmosClient extends DB {
     this.databaseName = this.getStringProperty("azurecosmos.databaseName",
         DEFAULT_DATABASE_NAME);
 
-    this.maxDegreeOfParallelismForQuery = this.getIntProperty(
-        "azurecosmos.maxDegreeOfParallelismForQuery",
-        DEFAULT_MAX_DEGREE_OF_PARALLELISM_FOR_QUERY);
+    this.maxDegreeOfParallelism = this.getIntProperty(
+        "azurecosmos.maxDegreeOfParallelism",
+        DEFAULT_MAX_DEGREE_OF_PARALLELISM);
+
+    this.maxBufferedItemCount = this.getIntProperty(
+        "azurecosmos.maxBufferedItemCount", DEFAULT_MAX_BUFFERED_ITEM_COUNT);
 
     this.includeExceptionStackInLog = this.getBooleanProperty(
         "azurecosmos.includeExceptionStackInLog",
@@ -156,12 +173,14 @@ public class AzureCosmosClient extends DB {
 
     try {
       LOGGER.info(
-          "Creating Cosmos DB client {}, using gateway={}, consistencyLevel={},"
+          "Creating Cosmos DB client {}, useGateway={}, consistencyLevel={},"
               + " maxRetryAttemptsOnThrottledRequests={}, maxRetryWaitTimeInSeconds={}"
-              + " useUpsert={}",
+              + " useUpsert={}, maxDegreeOfParallelism={}, maxBufferedItemCount={}",
           uri, useGateway, consistencyLevel.toString(),
           retryOptions.getMaxRetryAttemptsOnThrottledRequests(),
-          retryOptions.getMaxRetryWaitTime().toSeconds(), this.useUpsert);
+          retryOptions.getMaxRetryWaitTime().toSeconds(), this.useUpsert,
+          this.maxDegreeOfParallelism, this.maxBufferedItemCount);
+
       CosmosClientBuilder builder = new CosmosClientBuilder().endpoint(uri)
           .key(primaryKey).throttlingRetryOptions(retryOptions)
           .endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel);
@@ -173,10 +192,10 @@ public class AzureCosmosClient extends DB {
             gatewayConnectionConfig);
       }
       AzureCosmosClient.client = builder.buildClient();
-      LOGGER.info("Azure Cosmos connection created: {}", uri);
+      LOGGER.info("Azure Cosmos DB connection created to {}", uri);
     } catch (IllegalArgumentException e) {
       throw new DBException(
-          "Illegal argument passed in.  Check the format of your parameters.",
+          "Illegal argument passed in. Check the format of your parameters.",
           e);
     }
 
@@ -247,32 +266,98 @@ public class AzureCosmosClient extends DB {
   @Override
   public Status read(String table, String key, Set<String> fields,
       Map<String, ByteIterator> result) {
-    // String documentLink = getDocumentLink(this.databaseName, table, key);
-    /*
-     * CosmosContainer container = database.getContainer(table);
-     * 
-     * // Test if this needs a null check try { CosmosItemResponse<ObjectNode>
-     * response = container.readItem(key, new PartitionKey(key),
-     * ObjectNode.class); ObjectNode node = response.getItem(); if (fields ==
-     * null) { Iterator<Map.Entry<String, JsonNode>> iter = node.fields(); //
-     * while (iter.hasNext()) { // Map // } } else {
-     * 
-     * }
-     * 
-     * } catch (CosmosException e) { if (!this.includeExceptionStackInLog) { e =
-     * null; }
-     * LOGGER.error("Failed to read key {} in collection {} in database {}",
-     * key, table, this.databaseName, e); return Status.ERROR; }
-     * 
-     * // if (document != null) { // result.putAll(extractResult(document)); //
-     * }
-     */
+
+    try {
+      CosmosContainer container = database.getContainer(table);
+
+      // Test if this needs a null check
+      CosmosItemResponse<ObjectNode> response = container.readItem(key,
+          new PartitionKey(key), ObjectNode.class);
+      ObjectNode node = response.getItem();
+      Map<String, String> stringResults = new HashMap<>();
+      if (fields == null) {
+        Iterator<Map.Entry<String, JsonNode>> iter = node.fields(); //
+        while (iter.hasNext()) { // Map // } } else {
+          Entry<String, JsonNode> pair = iter.next();
+          stringResults.put(pair.getKey().toString(),
+              pair.getValue().toString());
+        }
+        StringByteIterator.putAllAsByteIterators(result, stringResults);
+      } else {
+        Iterator<Map.Entry<String, JsonNode>> iter = node.fields(); //
+        while (iter.hasNext()) { // Map // } } else {
+          Entry<String, JsonNode> pair = iter.next();
+          if (fields.contains(pair.getKey())) {
+            stringResults.put(pair.getKey().toString(),
+                pair.getValue().toString());
+          }
+        }
+        StringByteIterator.putAllAsByteIterators(result, stringResults);
+      }
+    } catch (CosmosException e) {
+      if (!this.includeExceptionStackInLog) {
+        e = null;
+      }
+      LOGGER.error("Failed to read key {} in collection {} in database {}", key,
+          table, this.databaseName, e);
+      return Status.ERROR;
+    }
+
+    // if (document != null) { // result.putAll(extractResult(document)); //
+
     return Status.OK;
+
   }
 
+  /**
+   * Perform a range scan for a set of records in the database. Each field/value
+   * pair from the result will be stored in a HashMap.
+   *
+   *
+   * @param table The name of the table
+   * @param startkey The record key of the first record to read.
+   * @param recordcount The number of records to read
+   * @param fields The list of fields to read, or null for all of them
+   * @param result A Vector of HashMaps, where each HashMap is a set field/value
+   *        pairs for one record
+   * @return Zero on success, a non-zero error code on error
+   */
   @Override
   public Status scan(String table, String startkey, int recordcount,
       Set<String> fields, Vector<HashMap<String, ByteIterator>> result) {
+    CosmosQueryRequestOptions queryOptions = new CosmosQueryRequestOptions();
+    queryOptions.setMaxDegreeOfParallelism(this.maxDegreeOfParallelism);
+    queryOptions.setMaxBufferedItemCount(this.maxBufferedItemCount);
+    LOGGER.info("" + queryOptions.isScanInQueryEnabled());
+    LOGGER.info("" + queryOptions.getMaxBufferedItemCount());
+    LOGGER.info("" + queryOptions.setResponseContinuationTokenLimitInKb());
+
+    CosmosContainer container = database.getContainer(table);
+
+    List<SqlParameter> paramList = new ArrayList<>();
+    paramList.add(new SqlParameter("@startkey", startkey));
+
+    SqlQuerySpec querySpec = new SqlQuerySpec(
+        this.createSelectTop(fields, recordcount)
+            + " FROM root r WHERE r.id >= @startkey",
+        paramList);
+    CosmosPagedIterable<ObjectNode> pagedIterable = container
+        .queryItems(querySpec, queryOptions, ObjectNode.class);
+    Iterator<ObjectNode> queryIterator = pagedIterable.iterator();
+    while (queryIterator.hasNext()) {
+      Map<String, String> stringResults = new HashMap<>();
+      ObjectNode node = queryIterator.next();
+      Iterator<Map.Entry<String, JsonNode>> nodeIterator = node.fields();
+      while (nodeIterator.hasNext()) {
+        Entry<String, JsonNode> pair = nodeIterator.next();
+        stringResults.put(pair.getKey().toString(), pair.getValue().toString());
+      }
+      HashMap<String, ByteIterator> byteResults = new HashMap<>();
+      StringByteIterator.putAllAsByteIterators(byteResults, stringResults);
+
+      result.add(byteResults);
+    }
+
     /*
      * List<Document> documents; FeedResponse<Document> feedResponse = null; try
      * { FeedOptions feedOptions = new FeedOptions();
@@ -368,15 +453,15 @@ public class AzureCosmosClient extends DB {
       } else {
         container.createItem(node, pk, new CosmosItemRequestOptions());
       }
+      return Status.OK;
     } catch (CosmosException e) {
       if (!this.includeExceptionStackInLog) {
         e = null;
       }
       LOGGER.error("Failed to insert key {} to collection {} in database {}",
           key, table, this.databaseName, e);
-      return Status.ERROR;
     }
-    return Status.OK;
+    return Status.ERROR;
   }
 
   @Override
@@ -398,6 +483,35 @@ public class AzureCosmosClient extends DB {
       LOGGER.error("Failed to delete key: {} in collection: {}", key, table, e);
     }
     return Status.ERROR;
+  }
+
+  private String createSelect(Set<String> fields) {
+    if (fields == null) {
+      return "SELECT * ";
+    } else {
+      StringBuilder result = new StringBuilder("SELECT ");
+      for (String field : fields) {
+        result.append(field).append(", ");
+      }
+      return result.toString();
+    }
+  }
+
+  private String createSelectTop(Set<String> fields, int top) {
+    if (fields == null) {
+      return "SELECT TOP " + top + " * ";
+    } else {
+      StringBuilder result = new StringBuilder("SELECT TOP ").append(top)
+          .append(" ");
+      int initLength = result.length();
+      for (String field : fields) {
+        if (result.length() != initLength) {
+          result.append(", ");
+        }
+        result.append("r['").append(field).append("'] ");
+      }
+      return result.toString();
+    }
   }
 
   /*
