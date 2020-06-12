@@ -44,8 +44,6 @@ import com.azure.cosmos.CosmosException;
 import com.azure.cosmos.DirectConnectionConfig;
 import com.azure.cosmos.GatewayConnectionConfig;
 import com.azure.cosmos.ThrottlingRetryOptions;
-import com.azure.cosmos.implementation.CosmosItemProperties;
-// import com.azure.cosmos.implementation.ConnectionPolicy;
 import com.azure.cosmos.models.CosmosItemRequestOptions;
 import com.azure.cosmos.models.CosmosItemResponse;
 import com.azure.cosmos.models.CosmosQueryRequestOptions;
@@ -184,16 +182,15 @@ public class AzureCosmosClient extends DB {
           this.maxDegreeOfParallelism, this.maxBufferedItemCount);
 
       CosmosClientBuilder builder = new CosmosClientBuilder().endpoint(uri)
-          .key(primaryKey).consistencyLevel(consistencyLevel);
-      // .throttlingRetryOptions(retryOptions)
-      // .endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel);
+          .key(primaryKey).throttlingRetryOptions(retryOptions)
+          .endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel);
 
-      /*
-       * if (useGateway) { // builder =
-       * builder.gatewayMode(gatewayConnectionConfig); } else { // builder =
-       * builder.directMode(directConnectionConfig, // gatewayConnectionConfig);
-       * }
-       */
+      if (useGateway) {
+        builder = builder.gatewayMode(gatewayConnectionConfig);
+      } else {
+        builder = builder.directMode(directConnectionConfig);
+      }
+
       AzureCosmosClient.client = builder.buildClient();
       LOGGER.info("Azure Cosmos DB connection created to {}", uri);
     } catch (IllegalArgumentException e) {
@@ -278,59 +275,74 @@ public class AzureCosmosClient extends DB {
   @Override
   public Status read(String table, String key, Set<String> fields,
       Map<String, ByteIterator> result) {
-    CosmosItemResponse<CosmosItemProperties> response0 = this.containers
-        .readItem(key, new PartitionKey(key), CosmosItemProperties.class);
+    // CosmosItemResponse<CosmosItemProperties> response0 = this.containers
+    // .readItem(key, new PartitionKey(key), CosmosItemProperties.class);
     // LOGGER.info("" + response0.getDuration().toMillis());
 
     // This is temporary, just so we don't have to call getContainer each
     // time.
-    CosmosContainer container = this.containers;
-    // database.getContainer(table);
-    // CosmosItemProperties item = new CosmosItemProperties();
-    CosmosItemProperties node = response0.getItem();
-    if (fields == null) {
+    /*
+     * CosmosContainer container = this.containers; //
+     * database.getContainer(table); // CosmosItemProperties item = new
+     * CosmosItemProperties(); CosmosItemProperties node = response0.getItem();
+     * if (fields == null) { Map<String, String> stringResults = new
+     * HashMap<>(); for (Entry<String, Object> entry : node.getMap().entrySet())
+     * { stringResults.put(entry.getKey(), entry.getValue().toString());
+     * 
+     * stringResults.put("field0", node.getField0());
+     * stringResults.put("field1", node.getField1());
+     * stringResults.put("field2", node.getField2());
+     * stringResults.put("field3", node.getField3());
+     * stringResults.put("field4", node.getField4());
+     * stringResults.put("field5", node.getField5());
+     * stringResults.put("field6", node.getField6());
+     * stringResults.put("field7", node.getField7());
+     * stringResults.put("field8", node.getField8());
+     * stringResults.put("field0", node.getField9());
+     * 
+     * StringByteIterator.putAllAsByteIterators(result, stringResults); } }
+     */
+    try {
+      CosmosContainer container = database.getContainer(table);
+
+      // Test if this needs a null check
+      CosmosItemResponse<ObjectNode> response = container.readItem(key,
+          new PartitionKey(key), ObjectNode.class);
+      if (response.getDuration().toMillis() > 500) {
+        LOGGER.info("end-to-end request latency in ms: "
+            + response.getDuration().toMillis() + ". Activity ID: "
+            + response.getActivityId() + ". Diagnostic log: "
+            + response.getDiagnostics().toString());
+      }
+      ObjectNode node = response.getItem();
       Map<String, String> stringResults = new HashMap<>();
-      for (Entry<String, Object> entry : node.getMap().entrySet()) {
-        stringResults.put(entry.getKey(), entry.getValue().toString());
-        /*
-         * stringResults.put("field0", node.getField0());
-         * stringResults.put("field1", node.getField1());
-         * stringResults.put("field2", node.getField2());
-         * stringResults.put("field3", node.getField3());
-         * stringResults.put("field4", node.getField4());
-         * stringResults.put("field5", node.getField5());
-         * stringResults.put("field6", node.getField6());
-         * stringResults.put("field7", node.getField7());
-         * stringResults.put("field8", node.getField8());
-         * stringResults.put("field0", node.getField9());
-         */
+      if (fields == null) {
+        Iterator<Map.Entry<String, JsonNode>> iter = node.fields(); //
+        while (iter.hasNext()) { // Map // } } else {
+          Entry<String, JsonNode> pair = iter.next();
+          stringResults.put(pair.getKey().toString(),
+              pair.getValue().toString());
+        }
+        StringByteIterator.putAllAsByteIterators(result, stringResults);
+      } else {
+        Iterator<Map.Entry<String, JsonNode>> iter = node.fields(); //
+        while (iter.hasNext()) { // Map // } } else {
+          Entry<String, JsonNode> pair = iter.next();
+          if (fields.contains(pair.getKey())) {
+            stringResults.put(pair.getKey().toString(),
+                pair.getValue().toString());
+          }
+        }
         StringByteIterator.putAllAsByteIterators(result, stringResults);
       }
+    } catch (CosmosException e) {
+      if (!this.includeExceptionStackInLog) {
+        e = null;
+      }
+      LOGGER.error("Failed to read key {} in collection {} in database {}", key,
+          table, this.databaseName, e);
+      return Status.ERROR;
     }
-
-    // CosmosItemResponse<ObjectNode> response = container.readItem(key,
-    // new PartitionKey(key), ObjectNode.class);
-    /*
-     * try { LOGGER.info("" + response.getDuration().toMillis() + " " // +
-     * response.getDiagnostics().toString() + "AND THROUGHPUT IS " +
-     * " compared to " + response0.getDuration().toMillis());
-     * 
-     * ObjectNode node = response.getItem(); Map<String, String> stringResults =
-     * new HashMap<>(); if (fields == null) { Iterator<Map.Entry<String,
-     * JsonNode>> iter = node.fields(); // while (iter.hasNext()) { // Map // }
-     * } else { Entry<String, JsonNode> pair = iter.next();
-     * stringResults.put(pair.getKey().toString(), pair.getValue().toString());
-     * } StringByteIterator.putAllAsByteIterators(result, stringResults); } else
-     * { Iterator<Map.Entry<String, JsonNode>> iter = node.fields(); // while
-     * (iter.hasNext()) { // Map // } } else { Entry<String, JsonNode> pair =
-     * iter.next(); if (fields.contains(pair.getKey())) {
-     * stringResults.put(pair.getKey().toString(), pair.getValue().toString());
-     * } } StringByteIterator.putAllAsByteIterators(result, stringResults); } }
-     * catch (CosmosException e) { throw e; // if
-     * (!this.includeExceptionStackInLog) { // e = null; // } //
-     * LOGGER.error("Failed to read key {} in collection {} in database {}", //
-     * key, // table, this.databaseName, e); // return Status.ERROR; }
-     */
 
     // if (document != null) { // result.putAll(extractResult(document)); //
 
