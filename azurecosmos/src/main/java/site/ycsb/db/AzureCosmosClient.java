@@ -162,6 +162,7 @@ public class AzureCosmosClient extends DB {
     directConnectionConfig.setIdleConnectionTimeout(Duration.ofSeconds(this
         .getIntProperty("azurecosmos.idleConnectionTimeout", Math.toIntExact(
             directConnectionConfig.getIdleConnectionTimeout().toSeconds()))));
+    directConnectionConfig.setMaxRequestsPerConnection(10000);
 
     GatewayConnectionConfig gatewayConnectionConfig = new GatewayConnectionConfig();
     gatewayConnectionConfig.setMaxConnectionPoolSize(
@@ -181,10 +182,15 @@ public class AzureCosmosClient extends DB {
           retryOptions.getMaxRetryWaitTime().toSeconds(), this.useUpsert,
           this.maxDegreeOfParallelism, this.maxBufferedItemCount);
 
+      // This is creating the actual client.
+      // I have tested this out also by completely removing all the options
+      // except for endpoint, key, and consistency level, to see if the defaults
+      // were fast, but it didn't change the 8000 ms issue.
       CosmosClientBuilder builder = new CosmosClientBuilder().endpoint(uri)
           .key(primaryKey).throttlingRetryOptions(retryOptions)
           .endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel);
 
+      // This is how we specify between gateway and direct in V4.
       if (useGateway) {
         builder = builder.gatewayMode(gatewayConnectionConfig);
       } else {
@@ -275,58 +281,41 @@ public class AzureCosmosClient extends DB {
   @Override
   public Status read(String table, String key, Set<String> fields,
       Map<String, ByteIterator> result) {
-    // CosmosItemResponse<CosmosItemProperties> response0 = this.containers
-    // .readItem(key, new PartitionKey(key), CosmosItemProperties.class);
-    // LOGGER.info("" + response0.getDuration().toMillis());
 
-    // This is temporary, just so we don't have to call getContainer each
-    // time.
-    /*
-     * CosmosContainer container = this.containers; //
-     * database.getContainer(table); // CosmosItemProperties item = new
-     * CosmosItemProperties(); CosmosItemProperties node = response0.getItem();
-     * if (fields == null) { Map<String, String> stringResults = new
-     * HashMap<>(); for (Entry<String, Object> entry : node.getMap().entrySet())
-     * { stringResults.put(entry.getKey(), entry.getValue().toString());
-     * 
-     * stringResults.put("field0", node.getField0());
-     * stringResults.put("field1", node.getField1());
-     * stringResults.put("field2", node.getField2());
-     * stringResults.put("field3", node.getField3());
-     * stringResults.put("field4", node.getField4());
-     * stringResults.put("field5", node.getField5());
-     * stringResults.put("field6", node.getField6());
-     * stringResults.put("field7", node.getField7());
-     * stringResults.put("field8", node.getField8());
-     * stringResults.put("field0", node.getField9());
-     * 
-     * StringByteIterator.putAllAsByteIterators(result, stringResults); } }
-     */
+    // This is the read method
     try {
-      CosmosContainer container = database.getContainer(table);
 
-      // Test if this needs a null check
+      // This isn't what it will look like when I push it, this is just getting
+      // a preloaded container for 'usertable'. Ideally, I will cache this
+      // container so I don't have to call getContainer from the database.
+      CosmosContainer container = this.containers;
+
+      // This is the actual read.
       CosmosItemResponse<ObjectNode> response = container.readItem(key,
           new PartitionKey(key), ObjectNode.class);
+
+      // This is the part that prints 8000 milliseconds sometimes.
       if (response.getDuration().toMillis() > 500) {
         LOGGER.info("end-to-end request latency in ms: "
             + response.getDuration().toMillis() + ". Activity ID: "
             + response.getActivityId() + ". Diagnostic log: "
             + response.getDiagnostics().toString());
       }
+
+      // The rest of this method is just parsing the result (this isn't slow).
       ObjectNode node = response.getItem();
       Map<String, String> stringResults = new HashMap<>();
       if (fields == null) {
-        Iterator<Map.Entry<String, JsonNode>> iter = node.fields(); //
-        while (iter.hasNext()) { // Map // } } else {
+        Iterator<Map.Entry<String, JsonNode>> iter = node.fields();
+        while (iter.hasNext()) {
           Entry<String, JsonNode> pair = iter.next();
           stringResults.put(pair.getKey().toString(),
               pair.getValue().toString());
         }
         StringByteIterator.putAllAsByteIterators(result, stringResults);
       } else {
-        Iterator<Map.Entry<String, JsonNode>> iter = node.fields(); //
-        while (iter.hasNext()) { // Map // } } else {
+        Iterator<Map.Entry<String, JsonNode>> iter = node.fields();
+        while (iter.hasNext()) {
           Entry<String, JsonNode> pair = iter.next();
           if (fields.contains(pair.getKey())) {
             stringResults.put(pair.getKey().toString(),
@@ -334,6 +323,7 @@ public class AzureCosmosClient extends DB {
           }
         }
         StringByteIterator.putAllAsByteIterators(result, stringResults);
+        return Status.OK;
       }
     } catch (CosmosException e) {
       if (!this.includeExceptionStackInLog) {
@@ -341,13 +331,8 @@ public class AzureCosmosClient extends DB {
       }
       LOGGER.error("Failed to read key {} in collection {} in database {}", key,
           table, this.databaseName, e);
-      return Status.ERROR;
     }
-
-    // if (document != null) { // result.putAll(extractResult(document)); //
-
-    return Status.OK;
-
+    return Status.ERROR;
   }
 
   /**
