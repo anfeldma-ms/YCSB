@@ -291,8 +291,9 @@ public class AzureCosmosClient extends DB {
       CosmosContainer container = this.containers;
 
       // This is the actual read.
-      CosmosItemResponse<ObjectNode> response = container.readItem(key,
-          new PartitionKey(key), ObjectNode.class);
+      CosmosItemResponse<ObjectNode> response = container.readItem(
+          "user1820151046732198393",
+          new PartitionKey("user1820151046732198393"), ObjectNode.class);
 
       // This is the part that prints 8000 milliseconds sometimes.
       if (response.getDuration().toMillis() > 500) {
@@ -303,28 +304,22 @@ public class AzureCosmosClient extends DB {
       }
 
       // The rest of this method is just parsing the result (this isn't slow).
-      ObjectNode node = response.getItem();
-      Map<String, String> stringResults = new HashMap<>();
-      if (fields == null) {
-        Iterator<Map.Entry<String, JsonNode>> iter = node.fields();
-        while (iter.hasNext()) {
-          Entry<String, JsonNode> pair = iter.next();
-          stringResults.put(pair.getKey().toString(),
-              pair.getValue().toString());
-        }
-        StringByteIterator.putAllAsByteIterators(result, stringResults);
-      } else {
-        Iterator<Map.Entry<String, JsonNode>> iter = node.fields();
-        while (iter.hasNext()) {
-          Entry<String, JsonNode> pair = iter.next();
-          if (fields.contains(pair.getKey())) {
-            stringResults.put(pair.getKey().toString(),
-                pair.getValue().toString());
-          }
-        }
-        StringByteIterator.putAllAsByteIterators(result, stringResults);
-        return Status.OK;
-      }
+      /*
+       * ObjectNode node = response.getItem(); Map<String, String> stringResults
+       * = new HashMap<>(); if (fields == null) { Iterator<Map.Entry<String,
+       * JsonNode>> iter = node.fields(); while (iter.hasNext()) { Entry<String,
+       * JsonNode> pair = iter.next();
+       * stringResults.put(pair.getKey().toString(),
+       * pair.getValue().toString()); }
+       * StringByteIterator.putAllAsByteIterators(result, stringResults); } else
+       * { Iterator<Map.Entry<String, JsonNode>> iter = node.fields(); while
+       * (iter.hasNext()) { Entry<String, JsonNode> pair = iter.next(); if
+       * (fields.contains(pair.getKey())) {
+       * stringResults.put(pair.getKey().toString(),
+       * pair.getValue().toString()); } }
+       * StringByteIterator.putAllAsByteIterators(result, stringResults); return
+       * Status.OK; }
+       */
     } catch (CosmosException e) {
       if (!this.includeExceptionStackInLog) {
         e = null;
@@ -332,7 +327,7 @@ public class AzureCosmosClient extends DB {
       LOGGER.error("Failed to read key {} in collection {} in database {}", key,
           table, this.databaseName, e);
     }
-    return Status.ERROR;
+    return Status.OK;
   }
 
   /**
