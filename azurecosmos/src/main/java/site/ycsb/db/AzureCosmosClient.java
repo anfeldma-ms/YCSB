@@ -296,13 +296,8 @@ public class AzureCosmosClient extends DB {
 
       CosmosItemResponse<ObjectNode> response = container.readItem(key,
           new PartitionKey(key), ObjectNode.class);
-
-      if (response.getDuration().toMillis() > 500) {
-        LOGGER.info("end-to-end request latency in ms: "
-            + response.getDuration().toMillis() + ". Activity ID: "
-            + response.getActivityId() + ". Diagnostic log: "
-            + response.getDiagnostics().toString());
-      }
+      LOGGER.info("end-to-end request latency in ms: "
+          + response.getDuration().toMillis());
 
       ObjectNode node = response.getItem();
       Map<String, String> stringResults = new HashMap<>();
