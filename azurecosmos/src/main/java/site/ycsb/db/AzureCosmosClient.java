@@ -23,11 +23,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
-// import java.util.Iterator;
-// import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-// import java.util.Map.Entry;
 import java.util.Set;
 import java.util.Vector;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -80,6 +77,7 @@ public class AzureCosmosClient extends DB {
   private static final int DEFAULT_MAX_DEGREE_OF_PARALLELISM = 0;
   private static final int DEFAULT_MAX_BUFFERED_ITEM_COUNT = 0;
   private static final boolean DEFAULT_INCLUDE_EXCEPTION_STACK_IN_LOG = false;
+  private static final String DEFAULT_USER_AGENT = "ycsb-4.0.1";
 
   private static final Logger LOGGER = LoggerFactory
       .getLogger(AzureCosmosClient.class);
@@ -97,7 +95,8 @@ public class AzureCosmosClient extends DB {
   private int maxDegreeOfParallelism;
   private int maxBufferedItemCount;
   private boolean includeExceptionStackInLog;
-  private CosmosContainer containers;
+  private Map<String, CosmosContainer> containerCache;
+  private String userAgent;
 
   @Override
   public synchronized void init() throws DBException {
@@ -123,6 +122,9 @@ public class AzureCosmosClient extends DB {
     if (primaryKey == null || primaryKey.isEmpty()) {
       throw new DBException("Missing uri required to connect to the database.");
     }
+
+    this.userAgent = this.getStringProperty("azurecosmos.userAgent",
+        DEFAULT_USER_AGENT);
 
     this.useUpsert = this.getBooleanProperty("azurecosmos.useUpsert",
         DEFAULT_USE_UPSERT);
@@ -188,7 +190,8 @@ public class AzureCosmosClient extends DB {
       // were fast, but it didn't change the 8000 ms issue.
       CosmosClientBuilder builder = new CosmosClientBuilder().endpoint(uri)
           .key(primaryKey).throttlingRetryOptions(retryOptions)
-          .endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel);
+          .endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel)
+          .userAgentSuffix(userAgent);
 
       // This is how we specify between gateway and direct in V4.
       if (useGateway) {
@@ -208,12 +211,13 @@ public class AzureCosmosClient extends DB {
           e);
     }
 
+    this.containerCache = new HashMap<>();
+
     // Verify the database exists
     try {
       AzureCosmosClient.database = AzureCosmosClient.client
           .getDatabase(databaseName);
       AzureCosmosClient.database.read();
-      this.containers = database.getContainer("usertable");
     } catch (CosmosException e) {
       if (!this.includeExceptionStackInLog) {
         e = null;
@@ -284,18 +288,15 @@ public class AzureCosmosClient extends DB {
 
     // This is the read method
     try {
+      CosmosContainer container = this.containerCache.get(key);
+      if (container == null) {
+        container = AzureCosmosClient.database.getContainer(table);
+        this.containerCache.put(table, container);
+      }
 
-      // This isn't what it will look like when I push it, this is just getting
-      // a preloaded container for 'usertable'. Ideally, I will cache this
-      // container so I don't have to call getContainer from the database.
-      CosmosContainer container = this.containers;
+      CosmosItemResponse<ObjectNode> response = container.readItem(key,
+          new PartitionKey(key), ObjectNode.class);
 
-      // This is the actual read.
-      CosmosItemResponse<ObjectNode> response = container.readItem(
-          "user1820151046732198393",
-          new PartitionKey("user1820151046732198393"), ObjectNode.class);
-
-      // This is the part that prints 8000 milliseconds sometimes.
       if (response.getDuration().toMillis() > 500) {
         LOGGER.info("end-to-end request latency in ms: "
             + response.getDuration().toMillis() + ". Activity ID: "
@@ -303,23 +304,29 @@ public class AzureCosmosClient extends DB {
             + response.getDiagnostics().toString());
       }
 
-      // The rest of this method is just parsing the result (this isn't slow).
-      /*
-       * ObjectNode node = response.getItem(); Map<String, String> stringResults
-       * = new HashMap<>(); if (fields == null) { Iterator<Map.Entry<String,
-       * JsonNode>> iter = node.fields(); while (iter.hasNext()) { Entry<String,
-       * JsonNode> pair = iter.next();
-       * stringResults.put(pair.getKey().toString(),
-       * pair.getValue().toString()); }
-       * StringByteIterator.putAllAsByteIterators(result, stringResults); } else
-       * { Iterator<Map.Entry<String, JsonNode>> iter = node.fields(); while
-       * (iter.hasNext()) { Entry<String, JsonNode> pair = iter.next(); if
-       * (fields.contains(pair.getKey())) {
-       * stringResults.put(pair.getKey().toString(),
-       * pair.getValue().toString()); } }
-       * StringByteIterator.putAllAsByteIterators(result, stringResults); return
-       * Status.OK; }
-       */
+      ObjectNode node = response.getItem();
+      Map<String, String> stringResults = new HashMap<>();
+      if (fields == null) {
+        Iterator<Map.Entry<String, JsonNode>> iter = node.fields();
+        while (iter.hasNext()) {
+          Entry<String, JsonNode> pair = iter.next();
+          stringResults.put(pair.getKey().toString(),
+              pair.getValue().toString());
+        }
+        StringByteIterator.putAllAsByteIterators(result, stringResults);
+      } else {
+        Iterator<Map.Entry<String, JsonNode>> iter = node.fields();
+        while (iter.hasNext()) {
+          Entry<String, JsonNode> pair = iter.next();
+          if (fields.contains(pair.getKey())) {
+            stringResults.put(pair.getKey().toString(),
+                pair.getValue().toString());
+          }
+        }
+        StringByteIterator.putAllAsByteIterators(result, stringResults);
+        return Status.OK;
+      }
+
     } catch (CosmosException e) {
       if (!this.includeExceptionStackInLog) {
         e = null;
@@ -349,9 +356,6 @@ public class AzureCosmosClient extends DB {
     CosmosQueryRequestOptions queryOptions = new CosmosQueryRequestOptions();
     queryOptions.setMaxDegreeOfParallelism(this.maxDegreeOfParallelism);
     queryOptions.setMaxBufferedItemCount(this.maxBufferedItemCount);
-    LOGGER.info("" + queryOptions.isScanInQueryEnabled());
-    LOGGER.info("" + queryOptions.getMaxBufferedItemCount());
-    LOGGER.info("" + queryOptions.setResponseContinuationTokenLimitInKb());
 
     CosmosContainer container = database.getContainer(table);
 
@@ -573,144 +577,4 @@ public class AzureCosmosClient extends DB {
       return result.toString();
     }
   }
-
-  /**
-   * Me.
-   * 
-   * @author armaans
-   *
-   */
-  public static final class ObjectField {
-    private String id;
-    private String field0;
-    private String field1;
-    private String field2;
-    private String field3;
-    private String field4;
-    private String field5;
-    private String field6;
-    private String field7;
-    private String field8;
-    private String field9;
-
-    public String getId() {
-      return id;
-    }
-
-    public void setId(String pid) {
-      this.id = pid;
-    }
-
-    public String getField0() {
-      return field0;
-    }
-
-    public void setField0(String pfield0) {
-      this.field0 = pfield0;
-    }
-
-    public String getField1() {
-      return field1;
-    }
-
-    public void setField1(String pfield1) {
-      this.field1 = pfield1;
-    }
-
-    public String getField2() {
-      return field2;
-    }
-
-    public void setField2(String pfield2) {
-      this.field2 = pfield2;
-    }
-
-    public String getField3() {
-      return field3;
-    }
-
-    public void setField3(String pfield3) {
-      this.field3 = pfield3;
-    }
-
-    public String getField4() {
-      return field4;
-    }
-
-    public void setField4(String pfield4) {
-      this.field4 = pfield4;
-    }
-
-    public String getField5() {
-      return field5;
-    }
-
-    public void setField5(String pfield5) {
-      this.field5 = pfield5;
-    }
-
-    public String getField6() {
-      return field6;
-    }
-
-    public void setField6(String pfield6) {
-      this.field6 = pfield6;
-    }
-
-    public String getField7() {
-      return field7;
-    }
-
-    public void setField7(String pfield7) {
-      this.field7 = pfield7;
-    }
-
-    public String getField8() {
-      return field8;
-    }
-
-    public void setField8(String pfield8) {
-      this.field8 = pfield8;
-    }
-
-    public String getField9() {
-      return field9;
-    }
-
-    public void setField9(String pfield9) {
-      this.field9 = pfield9;
-    }
-  }
-
-  /*
-   * private HashMap<String, ByteIterator> extractResult(Document item) { if
-   * (null == item) { return null; } HashMap<String, ByteIterator> rItems = new
-   * HashMap<>( item.getHashMap().size());
-   * 
-   * for (Entry<String, Object> attr : item.getHashMap().entrySet()) {
-   * rItems.put(attr.getKey(), new
-   * StringByteIterator(attr.getValue().toString())); } return rItems; }
-   * 
-   * private RequestOptions getRequestOptions(String key) { RequestOptions
-   * requestOptions = new RequestOptions(); requestOptions.setPartitionKey(new
-   * PartitionKey(key)); return requestOptions; }
-   * 
-   * private static String getDatabaseLink(String databaseName) { return
-   * String.format("%s/%s", DATABASES_PATH_SEGMENT, databaseName); }
-   * 
-   * private static String getDocumentCollectionLink(String databaseName, String
-   * table) { return String.format("%s/%s/%s", getDatabaseLink(databaseName),
-   * COLLECTIONS_PATH_SEGMENT, table); }
-   * 
-   * private static String getDocumentLink(String databaseName, String table,
-   * String key) { return String.format("%s/%s/%s",
-   * getDocumentCollectionLink(databaseName, table), DOCUMENTS_PATH_SEGMENT,
-   * key); }
-   * 
-   * private Document getDocumentDefinition(String key, Map<String,
-   * ByteIterator> values) { Document document = new Document();
-   * document.set("id", key); for (Entry<String, ByteIterator> entry :
-   * values.entrySet()) { document.set(entry.getKey(),
-   * entry.getValue().toString()); } return document; }
-   */
 }

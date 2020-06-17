@@ -21,12 +21,12 @@ LICENSE file.
 This section describes how to run YCSB on Azure Cosmos DB. 
 
 For more information on Azure Cosmos DB see 
-https://azure.microsoft.com/services/cosmos-db/
+https://azure.microsoft.com/services/cosmos-db/.
 
 ### 1. Setup
 This benchmark expects you to have pre-created the database "ycsb" and
-collection "usertable" before running the benchmark commands.  When
-prompted for a Partition Key use id and for RUs select a value you
+collection "usertable" before running the commands. When
+prompted for a Partition Key use "id" and for RUs select a value you
 want to benchmark.  [RUs are the measure of provisioned thoughput](https://docs.microsoft.com/azure/cosmos-db/request-units)
 that Azure Cosmos DB defines. The higher the RUs the more throughput you will
 get. You can override the default database name with the 
