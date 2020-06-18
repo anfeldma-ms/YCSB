@@ -296,8 +296,8 @@ public class AzureCosmosClient extends DB {
 
       CosmosItemResponse<ObjectNode> response = container.readItem(key,
           new PartitionKey(key), ObjectNode.class);
-      LOGGER.info("end-to-end request latency in ms: "
-          + response.getDuration().toMillis());
+      // LOGGER.info("end-to-end request latency in ms: "
+      // + response.getDuration().toMillis());
 
       ObjectNode node = response.getItem();
       Map<String, String> stringResults = new HashMap<>();
@@ -323,9 +323,6 @@ public class AzureCosmosClient extends DB {
       }
 
     } catch (CosmosException e) {
-      if (!this.includeExceptionStackInLog) {
-        e = null;
-      }
       LOGGER.error("Failed to read key {} in collection {} in database {}", key,
           table, this.databaseName, e);
     }
