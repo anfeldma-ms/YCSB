@@ -49,8 +49,6 @@ import com.azure.cosmos.models.SqlParameter;
 import com.azure.cosmos.models.SqlQuerySpec;
 import com.azure.cosmos.util.CosmosPagedIterable;
 import com.fasterxml.jackson.databind.JsonNode;
-// import com.fasterxml.jackson.core.JsonProcessingException;
-// import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
@@ -59,10 +57,9 @@ import site.ycsb.DB;
 import site.ycsb.DBException;
 import site.ycsb.Status;
 import site.ycsb.StringByteIterator;
-// import site.ycsb.StringByteIterator;
 
 /**
- * Azure Cosmos DB v1.00 client for YCSB.
+ * Azure Cosmos DB Java SDK V4.0.1 client for YCSB.
  */
 
 public class AzureCosmosClient extends DB {
@@ -184,10 +181,6 @@ public class AzureCosmosClient extends DB {
           retryOptions.getMaxRetryWaitTime().toSeconds(), this.useUpsert,
           this.maxDegreeOfParallelism, this.maxBufferedItemCount);
 
-      // This is creating the actual client.
-      // I have tested this out also by completely removing all the options
-      // except for endpoint, key, and consistency level, to see if the defaults
-      // were fast, but it didn't change the 8000 ms issue.
       CosmosClientBuilder builder = new CosmosClientBuilder().endpoint(uri)
           .key(primaryKey).throttlingRetryOptions(retryOptions)
           .endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel)
@@ -345,56 +338,46 @@ public class AzureCosmosClient extends DB {
   @Override
   public Status scan(String table, String startkey, int recordcount,
       Set<String> fields, Vector<HashMap<String, ByteIterator>> result) {
-    CosmosQueryRequestOptions queryOptions = new CosmosQueryRequestOptions();
-    queryOptions.setMaxDegreeOfParallelism(this.maxDegreeOfParallelism);
-    queryOptions.setMaxBufferedItemCount(this.maxBufferedItemCount);
+    try {
+      CosmosQueryRequestOptions queryOptions = new CosmosQueryRequestOptions();
+      queryOptions.setMaxDegreeOfParallelism(this.maxDegreeOfParallelism);
+      queryOptions.setMaxBufferedItemCount(this.maxBufferedItemCount);
 
-    CosmosContainer container = database.getContainer(table);
+      CosmosContainer container = database.getContainer(table);
 
-    List<SqlParameter> paramList = new ArrayList<>();
-    paramList.add(new SqlParameter("@startkey", startkey));
+      List<SqlParameter> paramList = new ArrayList<>();
+      paramList.add(new SqlParameter("@startkey", startkey));
 
-    SqlQuerySpec querySpec = new SqlQuerySpec(
-        this.createSelectTop(fields, recordcount)
-            + " FROM root r WHERE r.id >= @startkey",
-        paramList);
-    CosmosPagedIterable<ObjectNode> pagedIterable = container
-        .queryItems(querySpec, queryOptions, ObjectNode.class);
-    Iterator<ObjectNode> queryIterator = pagedIterable.iterator();
-    while (queryIterator.hasNext()) {
-      Map<String, String> stringResults = new HashMap<>();
-      ObjectNode node = queryIterator.next();
-      Iterator<Map.Entry<String, JsonNode>> nodeIterator = node.fields();
-      while (nodeIterator.hasNext()) {
-        Entry<String, JsonNode> pair = nodeIterator.next();
-        stringResults.put(pair.getKey().toString(), pair.getValue().toString());
+      SqlQuerySpec querySpec = new SqlQuerySpec(
+          this.createSelectTop(fields, recordcount)
+              + " FROM root r WHERE r.id >= @startkey",
+          paramList);
+      CosmosPagedIterable<ObjectNode> pagedIterable = container
+          .queryItems(querySpec, queryOptions, ObjectNode.class);
+      Iterator<ObjectNode> queryIterator = pagedIterable.iterator();
+      while (queryIterator.hasNext()) {
+        Map<String, String> stringResults = new HashMap<>();
+        ObjectNode node = queryIterator.next();
+        Iterator<Map.Entry<String, JsonNode>> nodeIterator = node.fields();
+        while (nodeIterator.hasNext()) {
+          Entry<String, JsonNode> pair = nodeIterator.next();
+          stringResults.put(pair.getKey().toString(),
+              pair.getValue().toString());
+        }
+        HashMap<String, ByteIterator> byteResults = new HashMap<>();
+        StringByteIterator.putAllAsByteIterators(byteResults, stringResults);
+
+        result.add(byteResults);
       }
-      HashMap<String, ByteIterator> byteResults = new HashMap<>();
-      StringByteIterator.putAllAsByteIterators(byteResults, stringResults);
-
-      result.add(byteResults);
+      return Status.OK;
+    } catch (CosmosException e) {
+      if (!this.includeExceptionStackInLog) {
+        e = null;
+      }
+      LOGGER.error("Failed to query key {} from collection {} in database {}",
+          startkey, table, this.databaseName, e);
     }
-
-    /*
-     * List<Document> documents; FeedResponse<Document> feedResponse = null; try
-     * { FeedOptions feedOptions = new FeedOptions();
-     * feedOptions.setEnableCrossPartitionQuery(true); feedOptions
-     * .setMaxDegreeOfParallelism(this.maxDegreeOfParallelismForQuery);
-     * feedResponse = AzureCosmosClient.client.queryDocuments(
-     * getDocumentCollectionLink(this.databaseName, table), new SqlQuerySpec(
-     * "SELECT TOP @recordcount * FROM root r WHERE r.id >= @startkey", new
-     * SqlParameterCollection( new SqlParameter("@recordcount", recordcount),
-     * new SqlParameter("@startkey", startkey))), feedOptions); documents =
-     * feedResponse.getQueryIterable().toList(); } catch (Exception e) { if
-     * (!this.includeExceptionStackInLog) { e = null; }
-     * LOGGER.error("Failed to scan with startKey={}, recordCount={}", startkey,
-     * recordcount, e); return Status.ERROR; }
-     * 
-     * if (documents != null) { for (Document document : documents) {
-     * result.add(this.extractResult(document)); } }
-     */
-
-    return Status.OK;
+    return Status.ERROR;
   }
 
   /**
@@ -438,41 +421,11 @@ public class AzureCosmosClient extends DB {
       LOGGER.error("Failed to update key {} to collection {} in database {}",
           key, table, this.databaseName, e);
 
-      // Azure Cosmos does not have patch support. Until then we need to read
+      // Azure Cosmos DB does not have patch support. Until then we need to read
       // the document, update in place, and then write back.
       // This could actually be made more efficient by using a stored procedure
       // and doing the read/modify write on the server side. Perhaps
       // that will be a future improvement.
-
-      /*
-       * String documentLink = getDocumentLink(this.databaseName, table, key);
-       * ResourceResponse<Document> updatedResource = null;
-       * ResourceResponse<Document> readResouce = null; RequestOptions
-       * reqOptions = null; Document document = null;
-       * 
-       * try { reqOptions = getRequestOptions(key); readResouce =
-       * AzureCosmosClient.client.readDocument(documentLink, reqOptions);
-       * document = readResouce.getResource(); } catch (DocumentClientException
-       * e) { if (!this.includeExceptionStackInLog) { e = null; } LOGGER.error(
-       * "Failed to read key {} in collection {} in database {} during update operation"
-       * , key, table, this.databaseName, e); return Status.ERROR; }
-       * 
-       * // Update values for (Entry<String, ByteIterator> entry :
-       * values.entrySet()) { document.set(entry.getKey(),
-       * entry.getValue().toString()); }
-       * 
-       * AccessCondition accessCondition = new AccessCondition();
-       * accessCondition.setCondition(document.getETag());
-       * accessCondition.setType(AccessConditionType.IfMatch);
-       * reqOptions.setAccessCondition(accessCondition);
-       * 
-       * try { updatedResource =
-       * AzureCosmosClient.client.replaceDocument(documentLink, document,
-       * reqOptions); } catch (DocumentClientException e) { if
-       * (!this.includeExceptionStackInLog) { e = null; }
-       * LOGGER.error("Failed to update key {}", key, e); return Status.ERROR; }
-       */
-
     }
     return Status.ERROR;
   }
@@ -539,18 +492,6 @@ public class AzureCosmosClient extends DB {
       LOGGER.error("Failed to delete key: {} in collection: {}", key, table, e);
     }
     return Status.ERROR;
-  }
-
-  private String createSelect(Set<String> fields) {
-    if (fields == null) {
-      return "SELECT * ";
-    } else {
-      StringBuilder result = new StringBuilder("SELECT ");
-      for (String field : fields) {
-        result.append(field).append(", ");
-      }
-      return result.toString();
-    }
   }
 
   private String createSelectTop(Set<String> fields, int top) {
