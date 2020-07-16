@@ -74,7 +74,7 @@ public class AzureCosmosClient extends DB {
   private static final int DEFAULT_MAX_DEGREE_OF_PARALLELISM = 0;
   private static final int DEFAULT_MAX_BUFFERED_ITEM_COUNT = 0;
   private static final boolean DEFAULT_INCLUDE_EXCEPTION_STACK_IN_LOG = false;
-  private static final String DEFAULT_USER_AGENT = "ycsb-4.0.1";
+  private static final String DEFAULT_USER_AGENT = "ycsb-4.1.0";
 
   private static final Logger LOGGER = LoggerFactory
       .getLogger(AzureCosmosClient.class);
@@ -101,8 +101,6 @@ public class AzureCosmosClient extends DB {
     if (client != null) {
       return;
     }
-    // org.apache.log4j.Logger.getLogger("io.netty")
-    // .setLevel(org.apache.log4j.Level.OFF);
     initAzureCosmosClient();
   }
 
@@ -186,7 +184,6 @@ public class AzureCosmosClient extends DB {
           .endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel)
           .userAgentSuffix(userAgent);
 
-      // This is how we specify between gateway and direct in V4.
       if (useGateway) {
         builder = builder.gatewayMode(gatewayConnectionConfig);
       } else {
@@ -278,8 +275,6 @@ public class AzureCosmosClient extends DB {
   @Override
   public Status read(String table, String key, Set<String> fields,
       Map<String, ByteIterator> result) {
-
-    // This is the read method
     try {
       CosmosContainer container = this.containerCache.get(key);
       if (container == null) {
@@ -289,9 +284,6 @@ public class AzureCosmosClient extends DB {
 
       CosmosItemResponse<ObjectNode> response = container.readItem(key,
           new PartitionKey(key), ObjectNode.class);
-      // LOGGER.info("end-to-end request latency in ms: "
-      // + response.getDuration().toMillis());
-
       ObjectNode node = response.getItem();
       Map<String, String> stringResults = new HashMap<>();
       if (fields == null) {
@@ -395,12 +387,8 @@ public class AzureCosmosClient extends DB {
       Map<String, ByteIterator> values) {
 
     try {
-
-      // read first
-
       CosmosContainer container = database.getContainer(table);
 
-      // Test if this needs a null check
       CosmosItemResponse<ObjectNode> response = container.readItem(key,
           new PartitionKey(key), ObjectNode.class);
       ObjectNode node = response.getItem();
@@ -409,7 +397,7 @@ public class AzureCosmosClient extends DB {
         node.put(pair.getKey(), pair.getValue().toString());
       }
 
-      // refactor this
+      // TODO: Refactor this method
       PartitionKey pk = new PartitionKey(key);
       container.replaceItem(node, key, pk, new CosmosItemRequestOptions());
 
