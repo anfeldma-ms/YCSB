@@ -150,7 +150,7 @@ public class AzureCosmosClient extends DB {
             retryOptions.getMaxRetryAttemptsOnThrottledRequests()));
     retryOptions.setMaxRetryWaitTime(Duration
         .ofSeconds(this.getIntProperty("azurecosmos.maxRetryWaitTimeInSeconds",
-            Math.toIntExact(retryOptions.getMaxRetryWaitTime().toSeconds()))));
+            Math.toIntExact(retryOptions.getMaxRetryWaitTime().toMillis() / 1000))));
 
     DirectConnectionConfig directConnectionConfig = new DirectConnectionConfig();
     directConnectionConfig.setMaxConnectionsPerEndpoint(
@@ -158,7 +158,7 @@ public class AzureCosmosClient extends DB {
             directConnectionConfig.getMaxConnectionsPerEndpoint()));
     directConnectionConfig.setIdleConnectionTimeout(Duration.ofSeconds(this
         .getIntProperty("azurecosmos.idleConnectionTimeout", Math.toIntExact(
-            directConnectionConfig.getIdleConnectionTimeout().toSeconds()))));
+            directConnectionConfig.getIdleConnectionTimeout().toMillis() / 1000))));
     directConnectionConfig.setMaxRequestsPerConnection(10000);
 
     GatewayConnectionConfig gatewayConnectionConfig = new GatewayConnectionConfig();
@@ -167,7 +167,7 @@ public class AzureCosmosClient extends DB {
             gatewayConnectionConfig.getMaxConnectionPoolSize()));
     gatewayConnectionConfig.setIdleConnectionTimeout(Duration.ofSeconds(this
         .getIntProperty("azurecosmos.idleConnectionTimeout", Math.toIntExact(
-            gatewayConnectionConfig.getIdleConnectionTimeout().toSeconds()))));
+            gatewayConnectionConfig.getIdleConnectionTimeout().toMillis() / 1000))));
 
     try {
       LOGGER.info(
@@ -176,7 +176,7 @@ public class AzureCosmosClient extends DB {
               + " useUpsert={}, maxDegreeOfParallelism={}, maxBufferedItemCount={}",
           uri, useGateway, consistencyLevel.toString(),
           retryOptions.getMaxRetryAttemptsOnThrottledRequests(),
-          retryOptions.getMaxRetryWaitTime().toSeconds(), this.useUpsert,
+          retryOptions.getMaxRetryWaitTime().toMillis() / 1000, this.useUpsert,
           this.maxDegreeOfParallelism, this.maxBufferedItemCount);
 
       CosmosClientBuilder builder = new CosmosClientBuilder().endpoint(uri)
