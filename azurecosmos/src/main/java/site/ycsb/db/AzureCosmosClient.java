@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.Vector;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.slf4j.Logger;
@@ -76,8 +77,7 @@ public class AzureCosmosClient extends DB {
   private static final boolean DEFAULT_INCLUDE_EXCEPTION_STACK_IN_LOG = false;
   private static final String DEFAULT_USER_AGENT = "ycsb-4.1.0";
 
-  private static final Logger LOGGER = LoggerFactory
-      .getLogger(AzureCosmosClient.class);
+  private static final Logger LOGGER = LoggerFactory.getLogger(AzureCosmosClient.class);
 
   /**
    * Count the number of times initialized to teardown on the last
@@ -87,21 +87,28 @@ public class AzureCosmosClient extends DB {
 
   private static CosmosClient client;
   private static CosmosDatabase database;
-  private String databaseName;
-  private boolean useUpsert;
-  private int maxDegreeOfParallelism;
-  private int maxBufferedItemCount;
-  private boolean includeExceptionStackInLog;
-  private Map<String, CosmosContainer> containerCache;
-  private String userAgent;
+  private static String databaseName;
+  private static boolean useUpsert;
+  private static int maxDegreeOfParallelism;
+  private static int maxBufferedItemCount;
+  private static boolean includeExceptionStackInLog;
+  private static Map<String, CosmosContainer> containerCache;
+  private static String userAgent;
 
   @Override
-  public synchronized void init() throws DBException {
+  public void init() throws DBException {
     INIT_COUNT.incrementAndGet();
-    if (client != null) {
-      return;
+
+    synchronized (INIT_COUNT) {
+      if (client != null) {
+        return;
+      }
+      try {
+        initAzureCosmosClient();
+      } catch (Exception e) {
+        throw new DBException(e);
+      }
     }
-    initAzureCosmosClient();
   }
 
   private void initAzureCosmosClient() throws DBException {
@@ -109,8 +116,7 @@ public class AzureCosmosClient extends DB {
     // Connection properties
     String primaryKey = this.getStringProperty("azurecosmos.primaryKey", null);
     if (primaryKey == null || primaryKey.isEmpty()) {
-      throw new DBException(
-          "Missing primary key required to connect to the database.");
+      throw new DBException("Missing primary key required to connect to the database.");
     }
 
     String uri = this.getStringProperty("azurecosmos.uri", null);
@@ -118,70 +124,57 @@ public class AzureCosmosClient extends DB {
       throw new DBException("Missing uri required to connect to the database.");
     }
 
-    this.userAgent = this.getStringProperty("azurecosmos.userAgent",
-        DEFAULT_USER_AGENT);
+    AzureCosmosClient.userAgent = this.getStringProperty("azurecosmos.userAgent", DEFAULT_USER_AGENT);
 
-    this.useUpsert = this.getBooleanProperty("azurecosmos.useUpsert",
-        DEFAULT_USE_UPSERT);
+    AzureCosmosClient.useUpsert = this.getBooleanProperty("azurecosmos.useUpsert", DEFAULT_USE_UPSERT);
 
-    this.databaseName = this.getStringProperty("azurecosmos.databaseName",
-        DEFAULT_DATABASE_NAME);
+    AzureCosmosClient.databaseName = this.getStringProperty("azurecosmos.databaseName", DEFAULT_DATABASE_NAME);
 
-    this.maxDegreeOfParallelism = this.getIntProperty(
-        "azurecosmos.maxDegreeOfParallelism",
+    AzureCosmosClient.maxDegreeOfParallelism = this.getIntProperty("azurecosmos.maxDegreeOfParallelism",
         DEFAULT_MAX_DEGREE_OF_PARALLELISM);
 
-    this.maxBufferedItemCount = this.getIntProperty(
-        "azurecosmos.maxBufferedItemCount", DEFAULT_MAX_BUFFERED_ITEM_COUNT);
+    AzureCosmosClient.maxBufferedItemCount = this.getIntProperty("azurecosmos.maxBufferedItemCount",
+        DEFAULT_MAX_BUFFERED_ITEM_COUNT);
 
-    this.includeExceptionStackInLog = this.getBooleanProperty(
-        "azurecosmos.includeExceptionStackInLog",
+    AzureCosmosClient.includeExceptionStackInLog = this.getBooleanProperty("azurecosmos.includeExceptionStackInLog",
         DEFAULT_INCLUDE_EXCEPTION_STACK_IN_LOG);
 
-    ConsistencyLevel consistencyLevel = ConsistencyLevel
-        .valueOf(this.getStringProperty("azurecosmos.consistencyLevel",
-            DEFAULT_CONSISTENCY_LEVEL.toString().toUpperCase()));
-    boolean useGateway = this.getBooleanProperty("azurecosmos.useGateway",
-        DEFAULT_USE_GATEWAY);
+    ConsistencyLevel consistencyLevel = ConsistencyLevel.valueOf(
+        this.getStringProperty("azurecosmos.consistencyLevel", DEFAULT_CONSISTENCY_LEVEL.toString().toUpperCase()));
+    boolean useGateway = this.getBooleanProperty("azurecosmos.useGateway", DEFAULT_USE_GATEWAY);
 
     ThrottlingRetryOptions retryOptions = new ThrottlingRetryOptions();
-    retryOptions.setMaxRetryAttemptsOnThrottledRequests(
-        this.getIntProperty("azurecosmos.maxRetryAttemptsOnThrottledRequests",
-            retryOptions.getMaxRetryAttemptsOnThrottledRequests()));
-    retryOptions.setMaxRetryWaitTime(Duration
-        .ofSeconds(this.getIntProperty("azurecosmos.maxRetryWaitTimeInSeconds",
-            Math.toIntExact(retryOptions.getMaxRetryWaitTime().toMillis() / 1000))));
+    retryOptions.setMaxRetryAttemptsOnThrottledRequests(this.getIntProperty(
+        "azurecosmos.maxRetryAttemptsOnThrottledRequests", retryOptions.getMaxRetryAttemptsOnThrottledRequests()));
+    retryOptions.setMaxRetryWaitTime(Duration.ofSeconds(this.getIntProperty("azurecosmos.maxRetryWaitTimeInSeconds",
+        Math.toIntExact(retryOptions.getMaxRetryWaitTime().toMillis() / 1000))));
 
     DirectConnectionConfig directConnectionConfig = new DirectConnectionConfig();
-    directConnectionConfig.setMaxConnectionsPerEndpoint(
-        this.getIntProperty("azurecosmos.maxConnectionPoolSize",
-            directConnectionConfig.getMaxConnectionsPerEndpoint()));
-    directConnectionConfig.setIdleConnectionTimeout(Duration.ofSeconds(this
-        .getIntProperty("azurecosmos.idleConnectionTimeout", Math.toIntExact(
-            directConnectionConfig.getIdleConnectionTimeout().toMillis() / 1000))));
+    directConnectionConfig.setMaxConnectionsPerEndpoint(this.getIntProperty("azurecosmos.maxConnectionPoolSize",
+        directConnectionConfig.getMaxConnectionsPerEndpoint()));
+    directConnectionConfig
+        .setIdleConnectionTimeout(Duration.ofSeconds(this.getIntProperty("azurecosmos.idleConnectionTimeout",
+            Math.toIntExact(directConnectionConfig.getIdleConnectionTimeout().toMillis() / 1000))));
     directConnectionConfig.setMaxRequestsPerConnection(10000);
 
     GatewayConnectionConfig gatewayConnectionConfig = new GatewayConnectionConfig();
     gatewayConnectionConfig.setMaxConnectionPoolSize(
-        this.getIntProperty("azurecosmos.maxConnectionPoolSize",
-            gatewayConnectionConfig.getMaxConnectionPoolSize()));
-    gatewayConnectionConfig.setIdleConnectionTimeout(Duration.ofSeconds(this
-        .getIntProperty("azurecosmos.idleConnectionTimeout", Math.toIntExact(
-            gatewayConnectionConfig.getIdleConnectionTimeout().toMillis() / 1000))));
+        this.getIntProperty("azurecosmos.maxConnectionPoolSize", gatewayConnectionConfig.getMaxConnectionPoolSize()));
+    gatewayConnectionConfig
+        .setIdleConnectionTimeout(Duration.ofSeconds(this.getIntProperty("azurecosmos.idleConnectionTimeout",
+            Math.toIntExact(gatewayConnectionConfig.getIdleConnectionTimeout().toMillis() / 1000))));
 
     try {
       LOGGER.info(
           "Creating Cosmos DB client {}, useGateway={}, consistencyLevel={},"
               + " maxRetryAttemptsOnThrottledRequests={}, maxRetryWaitTimeInSeconds={}"
               + " useUpsert={}, maxDegreeOfParallelism={}, maxBufferedItemCount={}",
-          uri, useGateway, consistencyLevel.toString(),
-          retryOptions.getMaxRetryAttemptsOnThrottledRequests(),
-          retryOptions.getMaxRetryWaitTime().toMillis() / 1000, this.useUpsert,
-          this.maxDegreeOfParallelism, this.maxBufferedItemCount);
+          uri, useGateway, consistencyLevel.toString(), retryOptions.getMaxRetryAttemptsOnThrottledRequests(),
+          retryOptions.getMaxRetryWaitTime().toMillis() / 1000, AzureCosmosClient.useUpsert,
+          AzureCosmosClient.maxDegreeOfParallelism, AzureCosmosClient.maxBufferedItemCount);
 
-      CosmosClientBuilder builder = new CosmosClientBuilder().endpoint(uri)
-          .key(primaryKey).throttlingRetryOptions(retryOptions)
-          .endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel)
+      CosmosClientBuilder builder = new CosmosClientBuilder().endpoint(uri).key(primaryKey)
+          .throttlingRetryOptions(retryOptions).endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel)
           .userAgentSuffix(userAgent);
 
       if (useGateway) {
@@ -193,27 +186,24 @@ public class AzureCosmosClient extends DB {
       AzureCosmosClient.client = builder.buildClient();
       LOGGER.info("Azure Cosmos DB connection created to {}", uri);
     } catch (IllegalArgumentException e) {
-      if (!this.includeExceptionStackInLog) {
+      if (!AzureCosmosClient.includeExceptionStackInLog) {
         e = null;
       }
-      throw new DBException(
-          "Illegal argument passed in. Check the format of your parameters.",
-          e);
+      throw new DBException("Illegal argument passed in. Check the format of your parameters.", e);
     }
 
-    this.containerCache = new HashMap<>();
+    AzureCosmosClient.containerCache = new ConcurrentHashMap<>();
 
     // Verify the database exists
     try {
-      AzureCosmosClient.database = AzureCosmosClient.client
-          .getDatabase(databaseName);
+      AzureCosmosClient.database = AzureCosmosClient.client.getDatabase(databaseName);
       AzureCosmosClient.database.read();
     } catch (CosmosException e) {
-      if (!this.includeExceptionStackInLog) {
+      if (!AzureCosmosClient.includeExceptionStackInLog) {
         e = null;
       }
-      throw new DBException("Invalid database name (" + this.databaseName
-          + ") or failed to read database.", e);
+      throw new DBException(
+          "Invalid database name (" + AzureCosmosClient.databaseName + ") or failed to read database.", e);
     }
   }
 
@@ -221,8 +211,7 @@ public class AzureCosmosClient extends DB {
     return getProperties().getProperty(propertyName, defaultValue);
   }
 
-  private boolean getBooleanProperty(String propertyName,
-      boolean defaultValue) {
+  private boolean getBooleanProperty(String propertyName, boolean defaultValue) {
     String stringVal = getProperties().getProperty(propertyName, null);
     if (stringVal == null) {
       return defaultValue;
@@ -248,16 +237,18 @@ public class AzureCosmosClient extends DB {
    */
   @Override
   public void cleanup() throws DBException {
-    if (INIT_COUNT.decrementAndGet() == 0) {
-      try {
-        AzureCosmosClient.client.close();
-      } catch (Exception e) {
-        if (!this.includeExceptionStackInLog) {
-          e = null;
+    synchronized (INIT_COUNT) {
+      if (INIT_COUNT.decrementAndGet() <= 0) {
+        try {
+          AzureCosmosClient.client.close();
+        } catch (Exception e) {
+          if (!AzureCosmosClient.includeExceptionStackInLog) {
+            e = null;
+          }
+          LOGGER.error("Could not close DocumentClient", e);
+        } finally {
+          client = null;
         }
-        LOGGER.error("Could not close DocumentClient", e);
-      } finally {
-        client = null;
       }
     }
   }
@@ -266,32 +257,29 @@ public class AzureCosmosClient extends DB {
    * Read a record from the database. Each field/value pair from the result will
    * be stored in a HashMap.
    *
-   * @param table The name of the table
-   * @param key The record key of the record to read.
+   * @param table  The name of the table
+   * @param key    The record key of the record to read.
    * @param fields The list of fields to read, or null for all of them
    * @param result A HashMap of field/value pairs for the result
    * @return Zero on success, a non-zero error code on error
    */
   @Override
-  public Status read(String table, String key, Set<String> fields,
-      Map<String, ByteIterator> result) {
+  public Status read(String table, String key, Set<String> fields, Map<String, ByteIterator> result) {
     try {
-      CosmosContainer container = this.containerCache.get(key);
+      CosmosContainer container = AzureCosmosClient.containerCache.get(key);
       if (container == null) {
         container = AzureCosmosClient.database.getContainer(table);
-        this.containerCache.put(table, container);
+        AzureCosmosClient.containerCache.put(table, container);
       }
 
-      CosmosItemResponse<ObjectNode> response = container.readItem(key,
-          new PartitionKey(key), ObjectNode.class);
+      CosmosItemResponse<ObjectNode> response = container.readItem(key, new PartitionKey(key), ObjectNode.class);
       ObjectNode node = response.getItem();
       Map<String, String> stringResults = new HashMap<>();
       if (fields == null) {
         Iterator<Map.Entry<String, JsonNode>> iter = node.fields();
         while (iter.hasNext()) {
           Entry<String, JsonNode> pair = iter.next();
-          stringResults.put(pair.getKey().toString(),
-              pair.getValue().toString());
+          stringResults.put(pair.getKey().toString(), pair.getValue().toString());
         }
         StringByteIterator.putAllAsByteIterators(result, stringResults);
       } else {
@@ -299,8 +287,7 @@ public class AzureCosmosClient extends DB {
         while (iter.hasNext()) {
           Entry<String, JsonNode> pair = iter.next();
           if (fields.contains(pair.getKey())) {
-            stringResults.put(pair.getKey().toString(),
-                pair.getValue().toString());
+            stringResults.put(pair.getKey().toString(), pair.getValue().toString());
           }
         }
         StringByteIterator.putAllAsByteIterators(result, stringResults);
@@ -308,8 +295,8 @@ public class AzureCosmosClient extends DB {
       }
 
     } catch (CosmosException e) {
-      LOGGER.error("Failed to read key {} in collection {} in database {}", key,
-          table, this.databaseName, e);
+      LOGGER.error("Failed to read key {} in collection {} in database {}", key, table, AzureCosmosClient.databaseName,
+          e);
     }
     return Status.OK;
   }
@@ -319,21 +306,21 @@ public class AzureCosmosClient extends DB {
    * pair from the result will be stored in a HashMap.
    *
    *
-   * @param table The name of the table
-   * @param startkey The record key of the first record to read.
+   * @param table       The name of the table
+   * @param startkey    The record key of the first record to read.
    * @param recordcount The number of records to read
-   * @param fields The list of fields to read, or null for all of them
-   * @param result A Vector of HashMaps, where each HashMap is a set field/value
-   *        pairs for one record
+   * @param fields      The list of fields to read, or null for all of them
+   * @param result      A Vector of HashMaps, where each HashMap is a set
+   *                    field/value pairs for one record
    * @return Zero on success, a non-zero error code on error
    */
   @Override
-  public Status scan(String table, String startkey, int recordcount,
-      Set<String> fields, Vector<HashMap<String, ByteIterator>> result) {
+  public Status scan(String table, String startkey, int recordcount, Set<String> fields,
+      Vector<HashMap<String, ByteIterator>> result) {
     try {
       CosmosQueryRequestOptions queryOptions = new CosmosQueryRequestOptions();
-      queryOptions.setMaxDegreeOfParallelism(this.maxDegreeOfParallelism);
-      queryOptions.setMaxBufferedItemCount(this.maxBufferedItemCount);
+      queryOptions.setMaxDegreeOfParallelism(AzureCosmosClient.maxDegreeOfParallelism);
+      queryOptions.setMaxBufferedItemCount(AzureCosmosClient.maxBufferedItemCount);
 
       CosmosContainer container = database.getContainer(table);
 
@@ -341,11 +328,8 @@ public class AzureCosmosClient extends DB {
       paramList.add(new SqlParameter("@startkey", startkey));
 
       SqlQuerySpec querySpec = new SqlQuerySpec(
-          this.createSelectTop(fields, recordcount)
-              + " FROM root r WHERE r.id >= @startkey",
-          paramList);
-      CosmosPagedIterable<ObjectNode> pagedIterable = container
-          .queryItems(querySpec, queryOptions, ObjectNode.class);
+          this.createSelectTop(fields, recordcount) + " FROM root r WHERE r.id >= @startkey", paramList);
+      CosmosPagedIterable<ObjectNode> pagedIterable = container.queryItems(querySpec, queryOptions, ObjectNode.class);
       Iterator<ObjectNode> queryIterator = pagedIterable.iterator();
       while (queryIterator.hasNext()) {
         Map<String, String> stringResults = new HashMap<>();
@@ -353,8 +337,7 @@ public class AzureCosmosClient extends DB {
         Iterator<Map.Entry<String, JsonNode>> nodeIterator = node.fields();
         while (nodeIterator.hasNext()) {
           Entry<String, JsonNode> pair = nodeIterator.next();
-          stringResults.put(pair.getKey().toString(),
-              pair.getValue().toString());
+          stringResults.put(pair.getKey().toString(), pair.getValue().toString());
         }
         HashMap<String, ByteIterator> byteResults = new HashMap<>();
         StringByteIterator.putAllAsByteIterators(byteResults, stringResults);
@@ -363,34 +346,32 @@ public class AzureCosmosClient extends DB {
       }
       return Status.OK;
     } catch (CosmosException e) {
-      if (!this.includeExceptionStackInLog) {
+      if (!AzureCosmosClient.includeExceptionStackInLog) {
         e = null;
       }
-      LOGGER.error("Failed to query key {} from collection {} in database {}",
-          startkey, table, this.databaseName, e);
+      LOGGER.error("Failed to query key {} from collection {} in database {}", startkey, table,
+          AzureCosmosClient.databaseName, e);
     }
     return Status.ERROR;
   }
 
   /**
    * Update a record in the database. Any field/value pairs in the specified
-   * values HashMap will be written into the record with the specified record
-   * key, overwriting any existing values with the same field name.
+   * values HashMap will be written into the record with the specified record key,
+   * overwriting any existing values with the same field name.
    *
-   * @param table The name of the table
-   * @param key The record key of the record to write.
+   * @param table  The name of the table
+   * @param key    The record key of the record to write.
    * @param values A HashMap of field/value pairs to update in the record
    * @return Zero on success, a non-zero error code on error
    */
   @Override
-  public Status update(String table, String key,
-      Map<String, ByteIterator> values) {
+  public Status update(String table, String key, Map<String, ByteIterator> values) {
 
     try {
       CosmosContainer container = database.getContainer(table);
 
-      CosmosItemResponse<ObjectNode> response = container.readItem(key,
-          new PartitionKey(key), ObjectNode.class);
+      CosmosItemResponse<ObjectNode> response = container.readItem(key, new PartitionKey(key), ObjectNode.class);
       ObjectNode node = response.getItem();
 
       for (Entry<String, ByteIterator> pair : values.entrySet()) {
@@ -403,11 +384,11 @@ public class AzureCosmosClient extends DB {
 
       return Status.OK;
     } catch (CosmosException e) {
-      if (!this.includeExceptionStackInLog) {
+      if (!AzureCosmosClient.includeExceptionStackInLog) {
         e = null;
       }
-      LOGGER.error("Failed to update key {} to collection {} in database {}",
-          key, table, this.databaseName, e);
+      LOGGER.error("Failed to update key {} to collection {} in database {}", key, table,
+          AzureCosmosClient.databaseName, e);
 
       // Azure Cosmos DB does not have patch support. Until then we need to read
       // the document, update in place, and then write back.
@@ -420,24 +401,21 @@ public class AzureCosmosClient extends DB {
 
   /**
    * Insert a record in the database. Any field/value pairs in the specified
-   * values HashMap will be written into the record with the specified record
-   * key.
+   * values HashMap will be written into the record with the specified record key.
    *
-   * @param table The name of the table
-   * @param key The record key of the record to insert.
+   * @param table  The name of the table
+   * @param key    The record key of the record to insert.
    * @param values A HashMap of field/value pairs to insert in the record
    * @return Zero on success, a non-zero error code on error
    */
   @Override
-  public Status insert(String table, String key,
-      Map<String, ByteIterator> values) {
+  public Status insert(String table, String key, Map<String, ByteIterator> values) {
     if (LOGGER.isDebugEnabled()) {
       LOGGER.debug("Insert key: " + key + " into table: " + table);
     }
 
     try {
-      CosmosContainer container = AzureCosmosClient.database
-          .getContainer(table);
+      CosmosContainer container = AzureCosmosClient.database.getContainer(table);
       PartitionKey pk = new PartitionKey(key);
       ObjectNode node = OBJECT_MAPPER.createObjectNode();
 
@@ -445,18 +423,18 @@ public class AzureCosmosClient extends DB {
       for (Map.Entry<String, ByteIterator> pair : values.entrySet()) {
         node.put(pair.getKey(), pair.getValue().toString());
       }
-      if (this.useUpsert) {
+      if (AzureCosmosClient.useUpsert) {
         container.upsertItem(node);
       } else {
         container.createItem(node, pk, new CosmosItemRequestOptions());
       }
       return Status.OK;
     } catch (CosmosException e) {
-      if (!this.includeExceptionStackInLog) {
+      if (!AzureCosmosClient.includeExceptionStackInLog) {
         e = null;
       }
-      LOGGER.error("Failed to insert key {} to collection {} in database {}",
-          key, table, this.databaseName, e);
+      LOGGER.error("Failed to insert key {} to collection {} in database {}", key, table,
+          AzureCosmosClient.databaseName, e);
     }
     return Status.ERROR;
   }
@@ -467,14 +445,12 @@ public class AzureCosmosClient extends DB {
       LOGGER.debug("Delete key: " + key + " from table: " + table);
     }
     try {
-      CosmosContainer container = AzureCosmosClient.database
-          .getContainer(table);
-      container.deleteItem(key, new PartitionKey(key),
-          new CosmosItemRequestOptions());
+      CosmosContainer container = AzureCosmosClient.database.getContainer(table);
+      container.deleteItem(key, new PartitionKey(key), new CosmosItemRequestOptions());
 
       return Status.OK;
     } catch (Exception e) {
-      if (!this.includeExceptionStackInLog) {
+      if (!AzureCosmosClient.includeExceptionStackInLog) {
         e = null;
       }
       LOGGER.error("Failed to delete key: {} in collection: {}", key, table, e);
@@ -486,8 +462,7 @@ public class AzureCosmosClient extends DB {
     if (fields == null) {
       return "SELECT TOP " + top + " * ";
     } else {
-      StringBuilder result = new StringBuilder("SELECT TOP ").append(top)
-          .append(" ");
+      StringBuilder result = new StringBuilder("SELECT TOP ").append(top).append(" ");
       int initLength = result.length();
       for (String field : fields) {
         if (result.length() != initLength) {
