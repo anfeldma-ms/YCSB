@@ -30,6 +30,7 @@ import java.util.Vector;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.azure.cosmos.models.FeedResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -74,6 +75,7 @@ public class AzureCosmosClient extends DB {
   private static final boolean DEFAULT_USE_UPSERT = false;
   private static final int DEFAULT_MAX_DEGREE_OF_PARALLELISM = 0;
   private static final int DEFAULT_MAX_BUFFERED_ITEM_COUNT = 0;
+  private static final int DEFAULT_PREFERRED_PAGE_SIZE = 0;
   private static final boolean DEFAULT_INCLUDE_EXCEPTION_STACK_IN_LOG = false;
   private static final String DEFAULT_USER_AGENT = "ycsb-4.1.0";
 
@@ -91,6 +93,7 @@ public class AzureCosmosClient extends DB {
   private static boolean useUpsert;
   private static int maxDegreeOfParallelism;
   private static int maxBufferedItemCount;
+  private static int preferredPageSize;
   private static boolean includeExceptionStackInLog;
   private static Map<String, CosmosContainer> containerCache;
   private static String userAgent;
@@ -136,6 +139,9 @@ public class AzureCosmosClient extends DB {
     AzureCosmosClient.maxBufferedItemCount = this.getIntProperty("azurecosmos.maxBufferedItemCount",
         DEFAULT_MAX_BUFFERED_ITEM_COUNT);
 
+    AzureCosmosClient.preferredPageSize = this.getIntProperty("azurecosmos.preferredPageSize",
+        DEFAULT_PREFERRED_PAGE_SIZE);
+
     AzureCosmosClient.includeExceptionStackInLog = this.getBooleanProperty("azurecosmos.includeExceptionStackInLog",
         DEFAULT_INCLUDE_EXCEPTION_STACK_IN_LOG);
 
@@ -168,10 +174,10 @@ public class AzureCosmosClient extends DB {
       LOGGER.info(
           "Creating Cosmos DB client {}, useGateway={}, consistencyLevel={},"
               + " maxRetryAttemptsOnThrottledRequests={}, maxRetryWaitTimeInSeconds={}"
-              + " useUpsert={}, maxDegreeOfParallelism={}, maxBufferedItemCount={}",
+              + " useUpsert={}, maxDegreeOfParallelism={}, maxBufferedItemCount={}, preferredPageSize={}",
           uri, useGateway, consistencyLevel.toString(), retryOptions.getMaxRetryAttemptsOnThrottledRequests(),
           retryOptions.getMaxRetryWaitTime().toMillis() / 1000, AzureCosmosClient.useUpsert,
-          AzureCosmosClient.maxDegreeOfParallelism, AzureCosmosClient.maxBufferedItemCount);
+          AzureCosmosClient.maxDegreeOfParallelism, AzureCosmosClient.maxBufferedItemCount, AzureCosmosClient.preferredPageSize);
 
       CosmosClientBuilder builder = new CosmosClientBuilder().endpoint(uri).key(primaryKey)
           .throttlingRetryOptions(retryOptions).endpointDiscoveryEnabled(false).consistencyLevel(consistencyLevel)
@@ -330,19 +336,20 @@ public class AzureCosmosClient extends DB {
       SqlQuerySpec querySpec = new SqlQuerySpec(
           this.createSelectTop(fields, recordcount) + " FROM root r WHERE r.id >= @startkey", paramList);
       CosmosPagedIterable<ObjectNode> pagedIterable = container.queryItems(querySpec, queryOptions, ObjectNode.class);
-      Iterator<ObjectNode> queryIterator = pagedIterable.iterator();
-      while (queryIterator.hasNext()) {
-        Map<String, String> stringResults = new HashMap<>();
-        ObjectNode node = queryIterator.next();
-        Iterator<Map.Entry<String, JsonNode>> nodeIterator = node.fields();
-        while (nodeIterator.hasNext()) {
-          Entry<String, JsonNode> pair = nodeIterator.next();
-          stringResults.put(pair.getKey().toString(), pair.getValue().toString());
+      Iterator<FeedResponse<ObjectNode>> pageIterator = pagedIterable.iterableByPage(AzureCosmosClient.preferredPageSize).iterator();
+      while (pageIterator.hasNext()) {
+        List<ObjectNode> pageDocs = pageIterator.next().getResults();
+        for (ObjectNode doc : pageDocs) {
+          Map<String, String> stringResults = new HashMap<>();
+          Iterator<Map.Entry<String, JsonNode>> nodeIterator = doc.fields();
+          while (nodeIterator.hasNext()) {
+            Entry<String, JsonNode> pair = nodeIterator.next();
+            stringResults.put(pair.getKey().toString(), pair.getValue().toString());
+          }
+          HashMap<String, ByteIterator> byteResults = new HashMap<>();
+          StringByteIterator.putAllAsByteIterators(byteResults, stringResults);
+          result.add(byteResults);
         }
-        HashMap<String, ByteIterator> byteResults = new HashMap<>();
-        StringByteIterator.putAllAsByteIterators(byteResults, stringResults);
-
-        result.add(byteResults);
       }
       return Status.OK;
     } catch (CosmosException e) {
