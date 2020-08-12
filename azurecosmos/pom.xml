@@ -70,8 +70,8 @@ LICENSE file.
         <configuration>
           <consoleOutput>true</consoleOutput>
           <configLocation>../checkstyle.xml</configLocation>
-          <failOnViolation>true</failOnViolation>
-          <failsOnError>true</failsOnError>
+          <failOnViolation>false</failOnViolation>
+          <failsOnError>false</failsOnError>
         </configuration>
         <executions>
           <execution>
