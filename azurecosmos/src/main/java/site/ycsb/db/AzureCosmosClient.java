@@ -375,34 +375,44 @@ public class AzureCosmosClient extends DB {
   @Override
   public Status update(String table, String key, Map<String, ByteIterator> values) {
 
-    try {
-      CosmosContainer container = database.getContainer(table);
+    int numAttempts = 4;
+    String readEtag = "";
 
-      CosmosItemResponse<ObjectNode> response = container.readItem(key, new PartitionKey(key), ObjectNode.class);
-      ObjectNode node = response.getItem();
+    for (int attempt = 0; attempt < numAttempts; attempt++) {
 
-      for (Entry<String, ByteIterator> pair : values.entrySet()) {
-        node.put(pair.getKey(), pair.getValue().toString());
+      try {
+        CosmosContainer container = database.getContainer(table);
+
+        CosmosItemResponse<ObjectNode> response = container.readItem(key, new PartitionKey(key), ObjectNode.class);
+        readEtag = response.getETag();
+        ObjectNode node = response.getItem();
+
+        for (Entry<String, ByteIterator> pair : values.entrySet()) {
+          node.put(pair.getKey(), pair.getValue().toString());
+        }
+
+        // TODO: Refactor this method
+        CosmosItemRequestOptions requestOptions = new CosmosItemRequestOptions();
+        requestOptions.setIfMatchETag(readEtag);
+        PartitionKey pk = new PartitionKey(key);
+        container.replaceItem(node, key, pk, requestOptions);
+
+        return Status.OK;
+      } catch (CosmosException e) {
+        if (!AzureCosmosClient.includeExceptionStackInLog) {
+          e = null;
+        }
+        LOGGER.error("Failed to update key {} to collection {} in database {} on attempt {}", key, table,
+            AzureCosmosClient.databaseName, attempt, e);
+
+        // Azure Cosmos DB does not have patch support. Until then we need to read
+        // the document, update in place, and then write back.
+        // This could actually be made more efficient by using a stored procedure
+        // and doing the read/modify write on the server side. Perhaps
+        // that will be a future improvement.
       }
-
-      // TODO: Refactor this method
-      PartitionKey pk = new PartitionKey(key);
-      container.replaceItem(node, key, pk, new CosmosItemRequestOptions());
-
-      return Status.OK;
-    } catch (CosmosException e) {
-      if (!AzureCosmosClient.includeExceptionStackInLog) {
-        e = null;
-      }
-      LOGGER.error("Failed to update key {} to collection {} in database {}", key, table,
-          AzureCosmosClient.databaseName, e);
-
-      // Azure Cosmos DB does not have patch support. Until then we need to read
-      // the document, update in place, and then write back.
-      // This could actually be made more efficient by using a stored procedure
-      // and doing the read/modify write on the server side. Perhaps
-      // that will be a future improvement.
     }
+
     return Status.ERROR;
   }
 
